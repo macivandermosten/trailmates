@@ -1,0 +1,110 @@
+name: Deploy to Lightsail
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Build frontend
+      working-directory: ./frontend
+      run: |
+        npm install
+        npm run build
+
+    - name: Build backend
+      working-directory: ./backend
+      run: |
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o app .
+
+    - name: Install SSH key
+      uses: shimataro/ssh-key-action@v2
+      with:
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        known_hosts: unnecessary
+        if_key_exists: replace
+
+    - name: Deploy to server
+      env:
+        SERVER_IP: ${{ secrets.SERVER_IP }}
+        SERVER_USER: ${{ secrets.SERVER_USER }}
+      run: |
+        SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        SSH_CMD="ssh $SSH_OPTS ${SERVER_USER}@${SERVER_IP}"
+        SCP_CMD="scp $SSH_OPTS"
+
+        # Stop backend
+        echo "=== Stopping backend ==="
+        $SSH_CMD "sudo systemctl stop app-backend || true"
+        sleep 2
+
+        # Upload backend binary
+        echo "=== Uploading backend ==="
+        $SSH_CMD "rm -f /var/www/app/backend/app"
+        $SCP_CMD backend/app ${SERVER_USER}@${SERVER_IP}:/var/www/app/backend/app
+        $SSH_CMD "chmod +x /var/www/app/backend/app"
+
+        # Upload frontend build
+        echo "=== Uploading frontend ==="
+        $SSH_CMD "rm -rf /var/www/app/frontend/dist/*"
+        $SCP_CMD -r frontend/dist/* ${SERVER_USER}@${SERVER_IP}:/var/www/app/frontend/dist/
+
+        # Start backend
+        echo "=== Starting backend ==="
+        $SSH_CMD "sudo systemctl start app-backend"
+        sleep 3
+
+        # Verify service is active
+        $SSH_CMD "sudo systemctl is-active app-backend || (sudo journalctl -u app-backend -n 40 --no-pager && exit 1)"
+        echo "Service active"
+
+    - name: Verify health via HTTPS
+      env:
+        SERVER_IP: ${{ secrets.SERVER_IP }}
+        SERVER_USER: ${{ secrets.SERVER_USER }}
+      run: |
+        SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        SSH_CMD="ssh $SSH_OPTS ${SERVER_USER}@${SERVER_IP}"
+
+        echo "=== Checking /api/health via HTTPS ==="
+        HEALTH=$($SSH_CMD "curl -sf --max-time 15 https://macicapstone.duckdns.org/api/health" || echo "CURL_FAILED")
+        echo "Response: $HEALTH"
+
+        if [ "$HEALTH" = "CURL_FAILED" ]; then
+          echo "--- Nginx error log ---"
+          $SSH_CMD "sudo tail -20 /var/log/nginx/error.log" || true
+          echo "--- Backend status ---"
+          $SSH_CMD "sudo systemctl status app-backend --no-pager" || true
+          exit 1
+        fi
+
+        echo "$HEALTH" | python3 -c "
+        import sys, json
+        raw = sys.stdin.read().strip()
+        try:
+            h = json.loads(raw)
+        except:
+            print(f'ERROR: Not JSON. Got: {raw[:200]}')
+            sys.exit(1)
+        if h.get('status') != 'ok':
+            print('ERROR: status is', h.get('status'))
+            sys.exit(1)
+        print('Health check passed:', h)
+        "

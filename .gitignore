@@ -1,0 +1,15 @@
+## Backend
+backend/app
+backend/*.exe
+
+## Frontend
+frontend/node_modules/
+frontend/dist/
+
+## Environment
+.env
+*.env
+
+## OS
+.DS_Store
+Thumbs.db
