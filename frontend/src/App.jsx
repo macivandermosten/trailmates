@@ -11,12 +11,12 @@ export default function App() {
       background: "#0f172a",
       color: "#f8fafc",
     }}>
-      <h1 style={{ fontSize: "3rem", marginBottom: "0.5rem" }}>TrailMates</h1>
+      <h1 style={{ fontSize: "3rem", marginBottom: "0.5rem" }}>Hello World</h1>
       <p style={{ color: "#94a3b8", fontSize: "1.2rem", marginBottom: "2rem" }}>
-        Plan smarter Europe trips. Meet compatible travelers.
+        TrailMates — infrastructure ready.
       </p>
       <p style={{ color: "#64748b", fontSize: "0.9rem" }}>
-        Infrastructure ready — app coming soon.
+        Plan smarter Europe trips. Meet compatible travelers.
       </p>
       <a
         href="/api/health"
