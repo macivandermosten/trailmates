@@ -52,27 +52,27 @@ jobs:
 
         # Stop backend
         echo "=== Stopping backend ==="
-        $SSH_CMD "sudo systemctl stop app-backend || true"
+        $SSH_CMD "sudo systemctl stop trailmates-backend || true"
         sleep 2
 
         # Upload backend binary
         echo "=== Uploading backend ==="
-        $SSH_CMD "rm -f /var/www/app/backend/app"
-        $SCP_CMD backend/app ${SERVER_USER}@${SERVER_IP}:/var/www/app/backend/app
-        $SSH_CMD "chmod +x /var/www/app/backend/app"
+        $SSH_CMD "rm -f /var/www/trailmates/backend/app"
+        $SCP_CMD backend/app ${SERVER_USER}@${SERVER_IP}:/var/www/trailmates/backend/app
+        $SSH_CMD "chmod +x /var/www/trailmates/backend/app"
 
         # Upload frontend build
         echo "=== Uploading frontend ==="
-        $SSH_CMD "rm -rf /var/www/app/frontend/dist/*"
-        $SCP_CMD -r frontend/dist/* ${SERVER_USER}@${SERVER_IP}:/var/www/app/frontend/dist/
+        $SSH_CMD "rm -rf /var/www/trailmates/frontend/dist/*"
+        $SCP_CMD -r frontend/dist/* ${SERVER_USER}@${SERVER_IP}:/var/www/trailmates/frontend/dist/
 
         # Start backend
         echo "=== Starting backend ==="
-        $SSH_CMD "sudo systemctl start app-backend"
+        $SSH_CMD "sudo systemctl start trailmates-backend"
         sleep 3
 
         # Verify service is active
-        $SSH_CMD "sudo systemctl is-active app-backend || (sudo journalctl -u app-backend -n 40 --no-pager && exit 1)"
+        $SSH_CMD "sudo systemctl is-active trailmates-backend || (sudo journalctl -u trailmates-backend -n 40 --no-pager && exit 1)"
         echo "Service active"
 
     - name: Verify health via HTTPS
@@ -91,7 +91,7 @@ jobs:
           echo "--- Nginx error log ---"
           $SSH_CMD "sudo tail -20 /var/log/nginx/error.log" || true
           echo "--- Backend status ---"
-          $SSH_CMD "sudo systemctl status app-backend --no-pager" || true
+          $SSH_CMD "sudo systemctl status trailmates-backend --no-pager" || true
           exit 1
         fi
 

@@ -17,8 +17,8 @@ Users build trips, get an optimized route, browse city attractions, and connect 
 - JWT stored in `localStorage`; 401 responses redirect to `/login`
 - Auth: full user table (email + password_hash), not single admin password
 - Backend reads env vars for DB credentials and JWT secret
-- Nginx serves frontend static files from `/var/www/app/frontend/dist`
-- systemd service `app-backend` runs `/var/www/app/backend/app`
+- Nginx serves frontend static files from `/var/www/trailmates/frontend/dist`
+- systemd service `trailmates-backend` runs `/var/www/trailmates/backend/app`
 
 ## File Structure
 ```
