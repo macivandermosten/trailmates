@@ -92,9 +92,9 @@ ON DUPLICATE KEY UPDATE name = VALUES(name);
 -- SAMPLE USERS (password is "password123" for all — bcrypt hash)
 -- =====================
 INSERT INTO users (id, email, password_hash) VALUES
-(1, 'alex@example.com',  '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy'),
-(2, 'jordan@example.com','$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy'),
-(3, 'sam@example.com',   '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy')
+(1, 'alex@example.com',  '$2a$10$7bqeHI/MJd4jxFK68VqEO.PtcbLoQs4IsHN1bL.WGNLLBcAUyNqUG'),
+(2, 'jordan@example.com','$2a$10$7bqeHI/MJd4jxFK68VqEO.PtcbLoQs4IsHN1bL.WGNLLBcAUyNqUG'),
+(3, 'sam@example.com',   '$2a$10$7bqeHI/MJd4jxFK68VqEO.PtcbLoQs4IsHN1bL.WGNLLBcAUyNqUG')
 ON DUPLICATE KEY UPDATE email = VALUES(email);
 
 INSERT INTO profiles (user_id, display_name, bio, travel_style, interests, is_visible) VALUES
