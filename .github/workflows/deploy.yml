@@ -41,41 +41,154 @@ jobs:
         known_hosts: unnecessary
         if_key_exists: replace
 
+    - name: Create systemd service file
+      env:
+        SERVER_USER: ${{ secrets.SERVER_USER }}
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        DB_HOST: ${{ secrets.DB_HOST }}
+        DB_NAME: ${{ secrets.DB_NAME }}
+        JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      run: |
+        if [ -z "$JWT_SECRET" ]; then echo "ERROR: JWT_SECRET secret is empty"; exit 1; fi
+        if [ -z "$DB_USER" ]; then echo "ERROR: DB_USER secret is empty"; exit 1; fi
+        if [ -z "$DB_PASSWORD" ]; then echo "ERROR: DB_PASSWORD secret is empty"; exit 1; fi
+
+        trim() { printf '%s' "$1" | tr -d '\r\n'; }
+        {
+          echo "[Unit]"
+          echo "Description=TrailMates Backend"
+          echo "After=network.target mysql.service"
+          echo ""
+          echo "[Service]"
+          echo "Type=simple"
+          echo "User=$(trim "${SERVER_USER}")"
+          echo "WorkingDirectory=/var/www/trailmates/backend"
+          echo "ExecStart=/var/www/trailmates/backend/app"
+          echo "Restart=always"
+          echo "RestartSec=5"
+          echo "Environment=\"DB_USER=$(trim "${DB_USER}")\""
+          echo "Environment=\"DB_PASSWORD=$(trim "${DB_PASSWORD}")\""
+          echo "Environment=\"DB_HOST=$(trim "${DB_HOST}")\""
+          echo "Environment=\"DB_NAME=$(trim "${DB_NAME}")\""
+          echo "Environment=\"JWT_SECRET=$(trim "${JWT_SECRET}")\""
+          echo ""
+          echo "[Install]"
+          echo "WantedBy=multi-user.target"
+        } > /tmp/trailmates-backend.service
+
+        echo "--- Generated service file (secrets redacted) ---"
+        sed 's/Environment=.*/Environment=<REDACTED>/' /tmp/trailmates-backend.service
+
     - name: Deploy to server
       env:
         SERVER_IP: ${{ secrets.SERVER_IP }}
         SERVER_USER: ${{ secrets.SERVER_USER }}
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        DB_HOST: ${{ secrets.DB_HOST }}
+        DB_NAME: ${{ secrets.DB_NAME }}
       run: |
         SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
         SSH_CMD="ssh $SSH_OPTS ${SERVER_USER}@${SERVER_IP}"
         SCP_CMD="scp $SSH_OPTS"
 
-        # Stop backend
-        echo "=== Stopping backend ==="
-        $SSH_CMD "sudo systemctl stop trailmates-backend || true"
-        sleep 2
+        # 1. Install service file
+        echo "=== Installing service file ==="
+        $SCP_CMD /tmp/trailmates-backend.service ${SERVER_USER}@${SERVER_IP}:/tmp/trailmates-backend.service
+        $SSH_CMD "sudo mv /tmp/trailmates-backend.service /etc/systemd/system/trailmates-backend.service && sudo systemctl daemon-reload"
 
-        # Upload backend binary
+        # 2. Stop old backend
+        echo "=== Stopping old backend ==="
+        $SSH_CMD 'bash -s' <<'KILL_SCRIPT'
+        set -x
+        sudo systemctl stop trailmates-backend 2>/dev/null || true
+        sudo systemctl mask trailmates-backend 2>/dev/null || true
+        sleep 1
+
+        if ! command -v fuser &>/dev/null; then
+          sudo apt-get install -y psmisc 2>/dev/null || true
+        fi
+
+        for attempt in 1 2 3; do
+          PIDS=$(sudo ss -tlnp "sport = :8080" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)
+          if [ -z "$PIDS" ]; then
+            echo "Port 8080 is free (attempt $attempt)"
+            break
+          fi
+          echo "Attempt $attempt: killing PIDs: $PIDS"
+          sudo fuser -k 8080/tcp 2>/dev/null || true
+          for P in $PIDS; do
+            sudo kill -9 "$P" 2>/dev/null || true
+          done
+          sleep 2
+        done
+        KILL_SCRIPT
+
+        # 3. Upload backend binary
         echo "=== Uploading backend ==="
+        $SSH_CMD "mkdir -p /var/www/trailmates/backend"
         $SSH_CMD "rm -f /var/www/trailmates/backend/app"
         $SCP_CMD backend/app ${SERVER_USER}@${SERVER_IP}:/var/www/trailmates/backend/app
         $SSH_CMD "chmod +x /var/www/trailmates/backend/app"
 
-        # Upload frontend build
+        # 4. Upload frontend
         echo "=== Uploading frontend ==="
+        $SSH_CMD "mkdir -p /var/www/trailmates/frontend/dist"
         $SSH_CMD "rm -rf /var/www/trailmates/frontend/dist/*"
         $SCP_CMD -r frontend/dist/* ${SERVER_USER}@${SERVER_IP}:/var/www/trailmates/frontend/dist/
 
-        # Start backend
+        # 5. Upload and run SQL
+        echo "=== Initializing database ==="
+        $SSH_CMD "mkdir -p /var/www/trailmates/db"
+        $SCP_CMD db/schema.sql db/seed.sql ${SERVER_USER}@${SERVER_IP}:/var/www/trailmates/db/
+        $SSH_CMD "set -e; H=\$(printf '%s' '${DB_HOST}' | tr -d '\r\n '); U=\$(printf '%s' '${DB_USER}' | tr -d '\r\n '); D=\$(printf '%s' '${DB_NAME}' | tr -d '\r\n '); export MYSQL_PWD=\$(printf '%s' '${DB_PASSWORD}' | tr -d '\r\n'); mysql -h \"\$H\" -u \"\$U\" \"\$D\" < /var/www/trailmates/db/schema.sql; mysql -h \"\$H\" -u \"\$U\" \"\$D\" < /var/www/trailmates/db/seed.sql"
+
+        # 6. Unmask and start
         echo "=== Starting backend ==="
-        $SSH_CMD "sudo systemctl start trailmates-backend"
-        sleep 3
+        $SSH_CMD 'bash -s' <<'START_SCRIPT'
+        set -x
+        sudo fuser -k 8080/tcp 2>/dev/null || true
+        sleep 1
 
-        # Verify service is active
-        $SSH_CMD "sudo systemctl is-active trailmates-backend || (sudo journalctl -u trailmates-backend -n 40 --no-pager && exit 1)"
-        echo "Service active"
+        sudo systemctl unmask trailmates-backend
+        sudo systemctl daemon-reload
+        sudo systemctl enable trailmates-backend
+        sudo systemctl start trailmates-backend
+        sleep 5
 
-    - name: Verify health via HTTPS
+        if ! sudo systemctl is-active --quiet trailmates-backend; then
+          echo "ERROR: Service is not active"
+          sudo systemctl status trailmates-backend --no-pager || true
+          sudo journalctl -u trailmates-backend -n 80 --no-pager
+          exit 1
+        fi
+        echo "Service is active"
+
+        PIDS=$(sudo ss -tlnp "sport = :8080" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)
+        if [ -z "$PIDS" ]; then
+          echo "ERROR: Nothing listening on port 8080"
+          sudo journalctl -u trailmates-backend -n 80 --no-pager
+          exit 1
+        fi
+        echo "Backend listening on port 8080 (PID: $PIDS)"
+
+        HEALTH=$(curl -sf http://localhost:8080/health 2>/dev/null || echo "FAILED")
+        echo "Health response: $HEALTH"
+        if ! echo "$HEALTH" | grep -q '"database":"connected"'; then
+          echo "WARNING: database not connected"
+          sudo journalctl -u trailmates-backend -n 40 --no-pager
+        fi
+        START_SCRIPT
+
+        echo "=== Recent logs ==="
+        $SSH_CMD "sudo journalctl -u trailmates-backend -n 30 --no-pager"
+
+        # 7. Ensure Nginx is running
+        echo "=== Ensuring Nginx is running ==="
+        $SSH_CMD "sudo nginx -t && (sudo systemctl enable nginx && (sudo systemctl reload nginx || sudo systemctl start nginx))"
+
+    - name: Verify health and data via HTTPS
       env:
         SERVER_IP: ${{ secrets.SERVER_IP }}
         SERVER_USER: ${{ secrets.SERVER_USER }}
@@ -86,7 +199,6 @@ jobs:
         echo "=== Checking /api/health via HTTPS ==="
         HEALTH=$($SSH_CMD "curl -sf --max-time 15 https://macicapstone.duckdns.org/api/health" || echo "CURL_FAILED")
         echo "Response: $HEALTH"
-
         if [ "$HEALTH" = "CURL_FAILED" ]; then
           echo "--- Nginx error log ---"
           $SSH_CMD "sudo tail -20 /var/log/nginx/error.log" || true
@@ -94,7 +206,6 @@ jobs:
           $SSH_CMD "sudo systemctl status trailmates-backend --no-pager" || true
           exit 1
         fi
-
         echo "$HEALTH" | python3 -c "
         import sys, json
         raw = sys.stdin.read().strip()
@@ -108,3 +219,17 @@ jobs:
             sys.exit(1)
         print('Health check passed:', h)
         "
+
+        echo "=== Checking /api/cities via HTTPS ==="
+        CITIES=$($SSH_CMD "curl -sf --max-time 15 https://macicapstone.duckdns.org/api/cities" || echo "CURL_FAILED")
+        echo "$CITIES" | head -c 500
+        echo ""
+
+        LEN=$(echo "$CITIES" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+        echo "Cities count: $LEN"
+        if [ "$LEN" -lt 1 ]; then
+          echo "ERROR: No cities found after seeding!"
+          $SSH_CMD "sudo journalctl -u trailmates-backend -n 80 --no-pager"
+          exit 1
+        fi
+        echo "Deployment successful! $LEN cities loaded."
