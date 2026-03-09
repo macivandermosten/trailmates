@@ -94,13 +94,15 @@ ON DUPLICATE KEY UPDATE name = VALUES(name);
 INSERT INTO users (id, email, password_hash) VALUES
 (1, 'alex@example.com',  '$2a$10$7bqeHI/MJd4jxFK68VqEO.PtcbLoQs4IsHN1bL.WGNLLBcAUyNqUG'),
 (2, 'jordan@example.com','$2a$10$7bqeHI/MJd4jxFK68VqEO.PtcbLoQs4IsHN1bL.WGNLLBcAUyNqUG'),
-(3, 'sam@example.com',   '$2a$10$7bqeHI/MJd4jxFK68VqEO.PtcbLoQs4IsHN1bL.WGNLLBcAUyNqUG')
+(3, 'sam@example.com',   '$2a$10$7bqeHI/MJd4jxFK68VqEO.PtcbLoQs4IsHN1bL.WGNLLBcAUyNqUG'),
+(4, 'admin@example.com', '$2a$10$7bqeHI/MJd4jxFK68VqEO.PtcbLoQs4IsHN1bL.WGNLLBcAUyNqUG')
 ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash);
 
 INSERT INTO profiles (user_id, display_name, bio, travel_style, interests, is_visible) VALUES
 (1, 'Alex', 'Gap-year backpacker from Canada. Love hiking and street food.', 'budget', '["hiking","food","history"]', TRUE),
 (2, 'Jordan', 'Digital nomad hopping around Europe. Into museums and coffee.', 'mid-range', '["museums","food","nightlife"]', TRUE),
-(3, 'Sam', 'Solo traveler from Australia. Outdoor adventures and local culture.', 'budget', '["hiking","outdoor","history"]', TRUE)
+(3, 'Sam', 'Solo traveler from Australia. Outdoor adventures and local culture.', 'budget', '["hiking","outdoor","history"]', TRUE),
+(4, 'Admin', 'Site administrator.', 'mid-range', '["hiking","food","museums"]', TRUE)
 ON DUPLICATE KEY UPDATE display_name = VALUES(display_name);
 
 -- =====================
