@@ -93,96 +93,47 @@ jobs:
         SSH_CMD="ssh $SSH_OPTS ${SERVER_USER}@${SERVER_IP}"
         SCP_CMD="scp $SSH_OPTS"
 
-        # 1. Install service file
+        # 1. Install service file and stop backend
         echo "=== Installing service file ==="
         $SCP_CMD /tmp/trailmates-backend.service ${SERVER_USER}@${SERVER_IP}:/tmp/trailmates-backend.service
         $SSH_CMD "sudo mv /tmp/trailmates-backend.service /etc/systemd/system/trailmates-backend.service && sudo systemctl daemon-reload"
 
-        # 2. Stop old backend
-        echo "=== Stopping old backend ==="
-        $SSH_CMD 'bash -s' <<'KILL_SCRIPT'
-        set -x
-        sudo systemctl stop trailmates-backend 2>/dev/null || true
-        sudo systemctl mask trailmates-backend 2>/dev/null || true
-        sleep 1
+        echo "=== Stopping backend ==="
+        $SSH_CMD "sudo systemctl stop trailmates-backend 2>/dev/null || true; sleep 2"
 
-        if ! command -v fuser &>/dev/null; then
-          sudo apt-get install -y psmisc 2>/dev/null || true
-        fi
-
-        for attempt in 1 2 3; do
-          PIDS=$(sudo ss -tlnp "sport = :8080" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)
-          if [ -z "$PIDS" ]; then
-            echo "Port 8080 is free (attempt $attempt)"
-            break
-          fi
-          echo "Attempt $attempt: killing PIDs: $PIDS"
-          sudo fuser -k 8080/tcp 2>/dev/null || true
-          for P in $PIDS; do
-            sudo kill -9 "$P" 2>/dev/null || true
-          done
-          sleep 2
-        done
-        KILL_SCRIPT
-
-        # 3. Upload backend binary
+        # 2. Upload backend binary
         echo "=== Uploading backend ==="
         $SSH_CMD "mkdir -p /var/www/trailmates/backend"
         $SSH_CMD "rm -f /var/www/trailmates/backend/app"
         $SCP_CMD backend/app ${SERVER_USER}@${SERVER_IP}:/var/www/trailmates/backend/app
         $SSH_CMD "chmod +x /var/www/trailmates/backend/app"
 
-        # 4. Upload frontend
+        # 3. Upload frontend
         echo "=== Uploading frontend ==="
         $SSH_CMD "mkdir -p /var/www/trailmates/frontend/dist"
         $SSH_CMD "rm -rf /var/www/trailmates/frontend/dist/*"
         $SCP_CMD -r frontend/dist/* ${SERVER_USER}@${SERVER_IP}:/var/www/trailmates/frontend/dist/
 
-        # 5. Upload and run SQL
+        # 4. Upload and run SQL
         echo "=== Initializing database ==="
         $SSH_CMD "mkdir -p /var/www/trailmates/db"
         $SCP_CMD db/schema.sql db/seed.sql ${SERVER_USER}@${SERVER_IP}:/var/www/trailmates/db/
         $SSH_CMD "set -e; H=\$(printf '%s' '${DB_HOST}' | tr -d '\r\n '); U=\$(printf '%s' '${DB_USER}' | tr -d '\r\n '); D=\$(printf '%s' '${DB_NAME}' | tr -d '\r\n '); export MYSQL_PWD=\$(printf '%s' '${DB_PASSWORD}' | tr -d '\r\n'); mysql -h \"\$H\" -u \"\$U\" \"\$D\" < /var/www/trailmates/db/schema.sql; mysql -h \"\$H\" -u \"\$U\" \"\$D\" < /var/www/trailmates/db/seed.sql"
 
-        # 6. Unmask and start
+        # 5. Start backend
         echo "=== Starting backend ==="
-        $SSH_CMD 'bash -s' <<'START_SCRIPT'
-        set -x
-        sudo fuser -k 8080/tcp 2>/dev/null || true
-        sleep 1
-
-        sudo systemctl unmask trailmates-backend
-        sudo systemctl daemon-reload
-        sudo systemctl enable trailmates-backend
-        sudo systemctl start trailmates-backend
+        $SSH_CMD "sudo systemctl enable trailmates-backend && sudo systemctl start trailmates-backend"
         sleep 5
 
-        if ! sudo systemctl is-active --quiet trailmates-backend; then
-          echo "ERROR: Service is not active"
-          sudo systemctl status trailmates-backend --no-pager || true
-          sudo journalctl -u trailmates-backend -n 80 --no-pager
-          exit 1
-        fi
+        # 6. Verify backend is running
+        $SSH_CMD "sudo systemctl is-active --quiet trailmates-backend || (echo 'ERROR: Service not active'; sudo journalctl -u trailmates-backend -n 40 --no-pager; exit 1)"
         echo "Service is active"
 
-        PIDS=$(sudo ss -tlnp "sport = :8080" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)
-        if [ -z "$PIDS" ]; then
-          echo "ERROR: Nothing listening on port 8080"
-          sudo journalctl -u trailmates-backend -n 80 --no-pager
-          exit 1
-        fi
-        echo "Backend listening on port 8080 (PID: $PIDS)"
-
-        HEALTH=$(curl -sf http://localhost:8080/health 2>/dev/null || echo "FAILED")
-        echo "Health response: $HEALTH"
-        if ! echo "$HEALTH" | grep -q '"database":"connected"'; then
-          echo "WARNING: database not connected"
-          sudo journalctl -u trailmates-backend -n 40 --no-pager
-        fi
-        START_SCRIPT
+        HEALTH=$($SSH_CMD "curl -sf http://localhost:8080/health" || echo "FAILED")
+        echo "Health: $HEALTH"
 
         echo "=== Recent logs ==="
-        $SSH_CMD "sudo journalctl -u trailmates-backend -n 30 --no-pager"
+        $SSH_CMD "sudo journalctl -u trailmates-backend -n 20 --no-pager"
 
         # 7. Ensure Nginx is running
         echo "=== Ensuring Nginx is running ==="
